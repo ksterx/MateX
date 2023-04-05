@@ -30,7 +30,7 @@ class Memory:
         return len(self.exps)
 
 
-class QNetwork(nn.Module):
+class QNet(nn.Module):
     def __init__(self, state_size, action_size, hidden_size, device):
         super().__init__()
 
@@ -50,15 +50,6 @@ class QNetwork(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-    def act(self, state, epsilon):
-        if random.random() > epsilon:
-            with torch.no_grad():
-                return torch.argmax(self(state)).view(1, 1)
-        else:
-            return torch.tensor(
-                [[random.randrange(self.action_size)]], device=self.device, dtype=torch.long
-            )
-
 
 class DQN:
     def __init__(
@@ -69,17 +60,24 @@ class DQN:
         self.memory = Memory(memory_size)
         self.batch_size = batch_size
         self.device = device
+        self.action_size = action_size
 
-        self.q_network = QNetwork(state_size, action_size, hidden_size, self.device).to(self.device)
-        self.target_network = QNetwork(state_size, action_size, hidden_size, self.device).to(
+        self.q_network = QNet(state_size, action_size, hidden_size, self.device).to(self.device)
+        self.target_network = QNet(state_size, action_size, hidden_size, self.device).to(
             self.device
         )
         self.target_network.load_state_dict(self.q_network.state_dict())
 
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.lr)
 
-    def act(self, state, epsilon):
-        return self.q_network.act(state, epsilon)
+    def act(self, state, epsilon, step=0, epsilon_decay=1.0, epsilon_min=0.01):
+        if random.random() > max(epsilon * epsilon_decay * step, epsilon_min)):
+            with torch.no_grad():
+                return torch.argmax(self.q_network(state)).view(1, 1)
+        else:
+            return torch.tensor(
+                [[random.randrange(self.action_size)]], device=self.device, dtype=torch.long
+            )
 
     def learn(self):
         if len(self.memory) < self.batch_size:
@@ -109,10 +107,10 @@ class DQN:
         self.optimizer.step()
 
     def save(self, path):
-        torch.save(self.model.state_dict(), path)
+        torch.save(self.q_network.state_dict(), path)
 
     def load(self, path):
-        self.model.load_state_dict(torch.load(path))
+        self.q_network.load_state_dict(torch.load(path))
 
     def memorize(self, state, action, next_state, reward, done):
         self.memory.add(state, action, next_state, reward, done)
@@ -133,11 +131,13 @@ def train():
     LR = 1e-4
     GAMMA = 0.99
     MEMORY_SIZE = 1000
-    BATCH_SIZE = 128
+    BATCH_SIZE = 32
     N_EPISODES = 1000
-    MAX_STEPS = 200
+    MAX_STEPS = 100
     EPSILON = 0.1
+    EPSILON_DECAY = 0.99
     HIDDEN_SIZE = 64
+    UPDATEW_FREQ = 10
 
     agent = DQN(
         lr=LR,
@@ -164,7 +164,7 @@ def train():
                 next_state = torch.tensor(next_state, device=device, dtype=torch.float).view(1, -1)
 
                 if done:
-                    if step >= MAX_STEPS:
+                    if step >= MAX_STEPS - 5:
                         reward = torch.tensor([[1.0]], device=device, dtype=torch.float).view(1, 1)
                     else:
                         reward = torch.tensor([[-1.0]], device=device, dtype=torch.float).view(1, 1)
@@ -173,9 +173,11 @@ def train():
 
                 agent.memorize(state, action, next_state, reward, done)
                 agent.learn()
-                agent.update_target_network()
 
                 state = next_state
+
+                if step % UPDATEW_FREQ == 0:
+                    agent.update_target_network()
 
                 if done:
                     writer.add_scalar("step", step, ep)

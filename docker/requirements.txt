@@ -1,3 +1,5 @@
 torch
-gymnasium
+gymnasium[all]
 tensorboard
+tqdm
+torch-tb-profiler
