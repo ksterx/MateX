@@ -82,11 +82,11 @@ class DQN:
         loss.backward()
         self.optimizer.step()
 
-    def save(self, path):
-        torch.save(self.q_network.state_dict(), path)
+    def save(self, ckpt_path):
+        torch.save(self.q_network.state_dict(), ckpt_path)
 
-    def load(self, path):
-        self.q_network.load_state_dict(torch.load(path))
+    def load(self, ckpt_path):
+        self.q_network.load_state_dict(torch.load(ckpt_path))
 
     def memorize(self, state, action, next_state, reward, done):
         self.memory.add(state, action, next_state, reward, done)
