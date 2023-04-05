@@ -53,7 +53,15 @@ class QNet(nn.Module):
 
 class DQN:
     def __init__(
-        self, lr, gamma, memory_size, batch_size, state_size, action_size, hidden_size, device
+        self,
+        lr,
+        gamma,
+        memory_size,
+        batch_size,
+        state_size,
+        action_size,
+        hidden_size,
+        device,
     ):
         self.lr = lr
         self.gamma = gamma
@@ -70,14 +78,26 @@ class DQN:
 
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.lr)
 
-    def act(self, state, epsilon, step=0, epsilon_decay=1.0, epsilon_min=0.01):
-        if random.random() > max(epsilon * epsilon_decay * step, epsilon_min)):
+    def act(
+        self,
+        state,
+        epsilon=0.1,
+        prog_rate=0,
+        epsilon_decay=1.0,
+        epsilon_min=0.01,
+        deterministic=False,
+    ):
+        if deterministic:
             with torch.no_grad():
                 return torch.argmax(self.q_network(state)).view(1, 1)
         else:
-            return torch.tensor(
-                [[random.randrange(self.action_size)]], device=self.device, dtype=torch.long
-            )
+            if random.random() > max(epsilon * epsilon_decay * (1 - prog_rate), epsilon_min):
+                with torch.no_grad():
+                    return torch.argmax(self.q_network(state)).view(1, 1)
+            else:
+                return torch.tensor(
+                    [[random.randrange(self.action_size)]], device=self.device, dtype=torch.long
+                )
 
     def learn(self):
         if len(self.memory) < self.batch_size:
@@ -115,8 +135,14 @@ class DQN:
     def memorize(self, state, action, next_state, reward, done):
         self.memory.add(state, action, next_state, reward, done)
 
-    def update_target_network(self):
-        self.target_network.load_state_dict(self.q_network.state_dict())
+    def update_target_network(self, soft_update=False, tau=1.0):
+        if soft_update:
+            for target_param, q_param in zip(
+                self.target_network.parameters(), self.q_network.parameters()
+            ):
+                target_param.data.copy_(tau * q_param.data + (1.0 - tau) * target_param.data)
+        else:
+            self.target_network.load_state_dict(self.q_network.state_dict())
 
 
 def train():
@@ -124,20 +150,23 @@ def train():
     import torch
     from torch.utils.tensorboard import SummaryWriter
 
-    env = gym.make("CartPole-v1", render_mode="human")
+    env = gym.make("CartPole-v1", render_mode=None)
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     LR = 1e-4
     GAMMA = 0.99
-    MEMORY_SIZE = 1000
-    BATCH_SIZE = 32
+    MEMORY_SIZE = 10000
+    BATCH_SIZE = 128
     N_EPISODES = 1000
-    MAX_STEPS = 100
+    MAX_STEPS = 200
     EPSILON = 0.1
     EPSILON_DECAY = 0.99
+    EPSILON_MIN = 0.01
     HIDDEN_SIZE = 64
-    UPDATEW_FREQ = 10
+    TARGET_NET_UPDATE_FREQ = 10
+    TAU = 0.01
+    BEST_STEP = 0
 
     agent = DQN(
         lr=LR,
@@ -156,10 +185,15 @@ def train():
 
             state, _ = env.reset()
             state = torch.tensor(state, device=device, dtype=torch.float).view(1, -1)
-            done = False
 
             for step in range(MAX_STEPS):
-                action = agent.act(state, epsilon=EPSILON)
+                action = agent.act(
+                    state,
+                    epsilon=EPSILON,
+                    prog_rate=ep / N_EPISODES,
+                    epsilon_decay=EPSILON_DECAY,
+                    epsilon_min=EPSILON_MIN,
+                )
                 next_state, _, done, _, _ = env.step(action.item())
                 next_state = torch.tensor(next_state, device=device, dtype=torch.float).view(1, -1)
 
@@ -176,14 +210,39 @@ def train():
 
                 state = next_state
 
-                if step % UPDATEW_FREQ == 0:
-                    agent.update_target_network()
+                if step % TARGET_NET_UPDATE_FREQ == 0:
+                    agent.update_target_network(soft_update=True, tau=TAU)
 
                 if done:
-                    writer.add_scalar("step", step, ep)
+                    writer.add_scalar("step", step + 1, ep)
+                    if step + 1 >= BEST_STEP:
+                        BEST_STEP = step + 1
+                        agent.save("./runs/dqn.pth")
                     break
 
-            pbar.set_postfix(step=f"{step:*>3}")
+            pbar.set_postfix(step=f"{step+1:*>3}")
+
+    writer.close()
+
+    def play():
+        import gym
+        import moviepy.editor as mpy
+
+        env = gym.make("CartPole-v1", render_mode="rgb_array")
+        env = gym.wrappers.RecordVideo(env, "./runs/")
+        state, _ = env.reset()
+        state = torch.tensor(state, device=device, dtype=torch.float).view(1, -1)
+        done = False
+
+        while not done:
+            action = agent.act(state, deterministic=True)
+            state, _, done, _, _ = env.step(action.item())
+            state = torch.tensor(state, device=device, dtype=torch.float).view(1, -1)
+
+        movie = mpy.VideoFileClip("./runs/rl-video-episode-0.mp4")
+        movie.write_gif("./runs/rl-video-episode-0.gif")
+
+    play()
 
 
 if __name__ == "__main__":
