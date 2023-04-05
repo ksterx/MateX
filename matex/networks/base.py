@@ -1,8 +1,6 @@
 from typing import List, Optional, Union
 
 import torch
-from room import notice
-from room.common.utils import get_device
 from torch import nn
 
 
@@ -109,7 +107,7 @@ class MLPBN(nn.Module):
         return self.net(x)
 
 
-class QNetwork(nn.Module):
+class QNet(nn.Module):
     def __init__(self, state_size, action_size, hidden_size, device):
         super().__init__()
 
@@ -128,12 +126,3 @@ class QNetwork(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
-    def act(self, state, epsilon):
-        if random.random() > epsilon:
-            with torch.no_grad():
-                return torch.argmax(self(state)).view(1, 1)
-        else:
-            return torch.tensor(
-                [[random.randrange(self.action_size)]], device=self.device, dtype=torch.long
-            )

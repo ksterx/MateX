@@ -1,0 +1,3 @@
+memory_size: 100000
+target_net_update_freq: 10
+tau: 1e-3
