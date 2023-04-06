@@ -284,3 +284,4 @@ runs/
 .hypothesis/
 experiments/
 mlruns/
+.trash/

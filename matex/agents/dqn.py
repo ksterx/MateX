@@ -101,7 +101,7 @@ class DQN:
     def memorize(self, state, action, next_state, reward, terminated):
         self.memory.add(state, action, next_state, reward, terminated)
 
-    def update_target_network(self, soft_update=False, tau=1.0):
+    def _update_target_network(self, soft_update=False, tau=1.0):
         if soft_update:
             for target_param, q_param in zip(
                 self.target_network.parameters(), self.q_network.parameters()
@@ -109,3 +109,10 @@ class DQN:
                 target_param.data.copy_(tau * q_param.data + (1.0 - tau) * target_param.data)
         else:
             self.target_network.load_state_dict(self.q_network.state_dict())
+
+    def on_step_end(self, step, soft_update=False, tau=1.0, update_freq=10, **kwargs):
+        if step % update_freq == 0:
+            self._update_target_network(soft_update, tau)
+
+    def on_episode_end(self):
+        pass

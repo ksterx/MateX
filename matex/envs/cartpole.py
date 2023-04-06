@@ -13,4 +13,4 @@ def get_reward_cartpole(reward, terminated, step, max_steps, device):
 
 
 def get_metrics_cartpole(state, reward, step):
-    return {"step": step + 1}, "step"
+    return {"duration": step + 1}, "duration"

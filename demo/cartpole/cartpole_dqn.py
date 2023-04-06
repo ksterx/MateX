@@ -69,7 +69,7 @@ def train():
                 state = next_state
 
                 if step % TARGET_NET_UPDATE_FREQ == 0:
-                    agent.update_target_network(soft_update=True, tau=TAU)
+                    agent._update_target_network(soft_update=True, tau=TAU)
 
                 if done:
                     writer.add_scalar("step", step + 1, ep)

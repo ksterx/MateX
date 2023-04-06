@@ -11,6 +11,10 @@ from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
 from matex.envs import EnvWrapper, env_name_aliases, get_metrics_dict, get_reward_dict
 
+import heartrate
+
+heartrate.trace(browser=True)
+
 
 class Trainer:
     def __init__(
@@ -28,7 +32,7 @@ class Trainer:
         """
 
         self.cfg = cfg
-        acfg = cfg.agents
+        self.acfg = cfg.agents
         self.callbacks = callbacks
         self.logger = logger
         try:
@@ -45,15 +49,15 @@ class Trainer:
         self.env = EnvWrapper(env, self.device)
 
         self.agent = DQN(
-            lr=acfg.lr,
-            gamma=acfg.gamma,
-            memory_size=acfg.memory_size,
-            batch_size=acfg.batch_size,
+            lr=self.acfg.lr,
+            gamma=self.acfg.gamma,
+            memory_size=self.acfg.memory_size,
+            batch_size=self.acfg.batch_size,
             state_size=self.env.observation_space.shape[0],
             action_size=self.env.action_space.n,
-            hidden_size=acfg.hidden_size,
+            hidden_size=self.acfg.hidden_size,
             device=self.device,
-            is_ddqn=acfg.is_ddqn,
+            is_ddqn=self.acfg.is_ddqn,
         )
 
     def train(self):
@@ -104,22 +108,17 @@ class Trainer:
 
                         state = next_state
 
-                        if step % self.cfg.agents.target_net_update_freq == 0:
-                            self.agent.update_target_network(
-                                soft_update=True,
-                                tau=self.cfg.agents.tau,
-                            )
-
                         if terminated or truncated:
                             self.logger.log_metric(
                                 key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
                             )
-                            # self.logger.log_metrics(metrics=metrics, step=ep)
                             self.agent.save(f"{temp_dir}/chekpoint.ckpt")
                             if best_metric_step >= best_metric_ep:
                                 best_metric_ep = best_metric_step
                                 self.agent.save(f"{temp_dir}/best.ckpt")
                             break
+
+                        self.agent.on_step_end(step, **self.acfg)
 
                     pbar.set_postfix(metric=f"{best_metric_step:.3g}")
 

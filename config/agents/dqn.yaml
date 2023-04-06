@@ -1,6 +1,6 @@
 memory_size: 100000
 soft_update: true
-target_net_update_freq: 10
+update_freq: 10
 tau: 1e-3
 gamma: 0.99
 lr: 1e-4
