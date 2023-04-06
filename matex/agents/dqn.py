@@ -1,5 +1,6 @@
 import random
 
+import ray
 import torch
 from torch.nn import functional as F
 
@@ -7,6 +8,7 @@ from matex.memories import Experience, Memory
 from matex.networks import QNet
 
 
+@ray.remote
 class DQN:
     def __init__(
         self,

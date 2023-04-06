@@ -2,6 +2,7 @@ import tempfile
 from typing import Dict, List, Optional, Union
 
 import gymnasium as gym
+import ray
 import torch
 from omegaconf import DictConfig
 from tqdm import trange
@@ -11,9 +12,9 @@ from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
 from matex.envs import EnvWrapper, env_name_aliases, get_metrics_dict, get_reward_dict
 
-import heartrate
+# import heartrate
 
-heartrate.trace(browser=True)
+# heartrate.trace(browser=True)
 
 
 class Trainer:
@@ -35,6 +36,8 @@ class Trainer:
         self.acfg = cfg.agents
         self.callbacks = callbacks
         self.logger = logger
+        self.n_episodes = self.cfg.n_episodes if not self.cfg.debug else 10
+
         try:
             self.env_name = env_name_aliases[cfg.exp_name]
         except KeyError:
@@ -48,7 +51,9 @@ class Trainer:
         env = gym.make(self.env_name, render_mode=render_mode)
         self.env = EnvWrapper(env, self.device)
 
-        self.agent = DQN(
+        ray.init()
+
+        self.agent = DQN.remote(
             lr=self.acfg.lr,
             gamma=self.acfg.gamma,
             memory_size=self.acfg.memory_size,
@@ -62,13 +67,10 @@ class Trainer:
 
     def train(self):
 
-        if self.logger == "mlflow":
-            self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
-            self.logger.log_hparams(self.cfg)
+        self._set_logger(self.logger)
 
-        n_episodes = self.cfg.n_episodes if not self.cfg.debug else 10
         with tempfile.TemporaryDirectory() as temp_dir:
-            with trange(n_episodes) as pbar:
+            with trange(self.n_episodes) as pbar:
                 best_metric_ep = -float("inf")
                 for ep in pbar:
                     pbar.set_description(f"[TRAIN] Episode: {ep+1:>5}")
@@ -77,13 +79,14 @@ class Trainer:
                     state, _ = self.env.reset()
 
                     for step in range(self.cfg.max_steps):
-                        action = self.agent.act(
+                        res = self.agent.act.remote(
                             state,
                             eps=self.cfg.eps_max,
                             prog_rate=ep / self.cfg.n_episodes,
                             eps_decay=self.cfg.eps_decay,
                             eps_min=self.cfg.eps_min,
                         )
+                        print(type(res))
 
                         next_state, reward, terminated, truncated, _ = self.env.step(action)
                         reward = get_reward_dict[self.cfg.exp_name](
@@ -103,8 +106,8 @@ class Trainer:
 
                         self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
 
-                        self.agent.memorize(state, action, next_state, reward, terminated)
-                        self.agent.learn()
+                        self.agent.memorize.remote(state, action, next_state, reward, terminated)
+                        self.agent.learn.remote()
 
                         state = next_state
 
@@ -112,13 +115,13 @@ class Trainer:
                             self.logger.log_metric(
                                 key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
                             )
-                            self.agent.save(f"{temp_dir}/chekpoint.ckpt")
+                            self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
                             if best_metric_step >= best_metric_ep:
                                 best_metric_ep = best_metric_step
-                                self.agent.save(f"{temp_dir}/best.ckpt")
+                                self.agent.save.remote(f"{temp_dir}/best.ckpt")
                             break
 
-                        self.agent.on_step_end(step, **self.acfg)
+                        self.agent.on_step_end.remote(step, **self.acfg)
 
                     pbar.set_postfix(metric=f"{best_metric_step:.3g}")
 
@@ -147,7 +150,7 @@ class Trainer:
                 for ep in pbar:
                     pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
                     while not (terminated or truncated):
-                        action = self.agent.act(state, deterministic=True)
+                        action = ray.get(self.agent.act.remote(state, deterministic=True))
                         state, _, terminated, truncated, _ = env.step(action.item())
                         state = torch.tensor(
                             state,
@@ -170,8 +173,13 @@ class Trainer:
             for ep in pbar:
                 pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
                 while not (terminated or truncated):
-                    action = self.agent.act(state, deterministic=True)
+                    action = self.agent.act.remote(state, deterministic=True)
                     state, _, terminated, truncated, _ = env.step(action)
 
     def load(self, ckpt_path):
-        self.agent.load(ckpt_path)
+        self.agent.load.remote(ckpt_path)
+
+    def _set_logger(self, logger: str):
+        if logger == "mlflow":
+            self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
+            self.logger.log_hparams(self.cfg)
