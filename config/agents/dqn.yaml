@@ -6,3 +6,4 @@ gamma: 0.99
 lr: 1e-4
 batch_size: 64
 hidden_size: 64
+is_ddqn: true

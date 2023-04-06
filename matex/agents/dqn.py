@@ -18,6 +18,7 @@ class DQN:
         action_size,
         hidden_size,
         device,
+        is_ddqn=True,
     ):
         self.lr = lr
         self.gamma = gamma
@@ -25,6 +26,7 @@ class DQN:
         self.batch_size = batch_size
         self.device = device
         self.action_size = action_size
+        self.is_ddqn = is_ddqn
 
         self.q_network = QNet(state_size, action_size, hidden_size, self.device).to(self.device)
         self.target_network = QNet(state_size, action_size, hidden_size, self.device).to(
@@ -66,20 +68,28 @@ class DQN:
         actions = torch.cat(batch.action)
         next_states = torch.cat(batch.next_state)
         rewards = torch.cat(batch.reward)
-        dones = torch.tensor(batch.done, device=self.device, dtype=torch.float).view(-1, 1)
+        terminateds = torch.tensor(batch.terminated, device=self.device, dtype=torch.float).view(
+            -1, 1
+        )
 
         self.q_network.eval()
         estimated_Qs = self.q_network(states).gather(1, actions)
 
-        with torch.no_grad():
+        if self.is_ddqn:
+            next_actions = self.q_network(next_states).argmax(1).unsqueeze(1)
+            next_Qs = self.target_network(next_states).gather(1, next_actions)
+
+        else:
             next_Qs = self.target_network(next_states).max(1)[0].unsqueeze(1)
-            target_Qs = rewards + self.gamma * next_Qs * (1 - dones)
+
+        target_Qs = rewards + self.gamma * next_Qs * (1 - terminateds)
 
         self.q_network.train()
         loss = F.smooth_l1_loss(estimated_Qs, target_Qs)
 
         self.optimizer.zero_grad()
         loss.backward()
+        # torch.nn.utils.clip_grad_value_(self.q_network.parameters(), 1.0)
         self.optimizer.step()
 
     def save(self, ckpt_path):
@@ -88,8 +98,8 @@ class DQN:
     def load(self, ckpt_path):
         self.q_network.load_state_dict(torch.load(ckpt_path))
 
-    def memorize(self, state, action, next_state, reward, done):
-        self.memory.add(state, action, next_state, reward, done)
+    def memorize(self, state, action, next_state, reward, terminated):
+        self.memory.add(state, action, next_state, reward, terminated)
 
     def update_target_network(self, soft_update=False, tau=1.0):
         if soft_update:

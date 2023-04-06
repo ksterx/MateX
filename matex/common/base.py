@@ -52,14 +52,14 @@ def play_agent(env_name, ckpt_path, n_episodes=10):
 
     state, _ = env.reset()
     state = torch.tensor(state, device=device, dtype=torch.float).view(1, -1)
-    done = False
+    terminated = False
 
     with trange(n_episodes) as pbar:
         for ep in pbar:
             pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
-            while not done:
+            while not terminated:
                 action = agent.act(state, deterministic=True)
-                state, _, done, _, _ = env.step(action.item())
+                state, _, terminated, _, _ = env.step(action.item())
                 state = torch.tensor(state, device=device, dtype=torch.float).view(1, -1)
 
     # movie = mpy.VideoFileClip("./runs/rl-video-episode-0.mp4")

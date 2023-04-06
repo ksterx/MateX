@@ -10,8 +10,9 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
     trainer = Trainer(cfg, logger="mlflow")
     trainer.train()
-    trainer.test(n_episodes=10)
-    notice.info("Done!")
+    trainer.test()
+    trainer.play()
+    notice.info("Completed!")
 
 
 if __name__ == "__main__":

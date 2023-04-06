@@ -94,8 +94,8 @@ class MLFlowLogger(Logger):
     def log_metric(self, key, value, step: Union[str, int]):
         self.client.log_metric(self.run_id, key, value, step)
 
-    def log_metrics(self, metris: Dict[str, Any], step: Union[str, int]):
-        for k, v in metris.items():
+    def log_metrics(self, metrics: Dict[str, Any], step: Union[str, int]):
+        for k, v in metrics.items():
             self.log_metric(k, v, step)
 
     def log_hparams(self, params: Union[Dict[str, Any], DictConfig]) -> None:
@@ -115,3 +115,6 @@ class MLFlowLogger(Logger):
 
     def log_artifact(self, local_path, artifact_path=None):
         self.client.log_artifact(self.run_id, local_path, artifact_path)
+
+    def close(self):
+        self.client.set_terminated(self.run_id)
