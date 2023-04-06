@@ -91,12 +91,12 @@ class MLFlowLogger(Logger):
     def log_param(self, key, value):
         self.client.log_param(self.run_id, key, value)
 
-    def log_metric(self, key, value, step: Union[str, int]):
-        self.client.log_metric(self.run_id, key, value, step)
+    def log_metric(self, key, value, step: Union[str, int], prefix: str = ""):
+        self.client.log_metric(self.run_id, prefix + key, value, step)
 
-    def log_metrics(self, metrics: Dict[str, Any], step: Union[str, int]):
+    def log_metrics(self, metrics: Dict[str, Any], step: Union[str, int], prefix: str = ""):
         for k, v in metrics.items():
-            self.log_metric(k, v, step)
+            self.log_metric(k, v, step, prefix)
 
     def log_hparams(self, params: Union[Dict[str, Any], DictConfig]) -> None:
 

@@ -1,18 +1,31 @@
 import tempfile
+from typing import Dict, List, Optional, Union
 
 import gymnasium as gym
 import torch
-from torch.utils.tensorboard import SummaryWriter
+from omegaconf import DictConfig
 from tqdm import trange
 
 from matex.agents import DQN
-from matex.common import notice
+from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
 from matex.envs import EnvWrapper, env_name_aliases, get_metrics_dict, get_reward_dict
 
 
 class Trainer:
-    def __init__(self, cfg, callbacks=None, logger: str = None):
+    def __init__(
+        self,
+        cfg: DictConfig,
+        callbacks: List[Callback] = None,
+        logger: str = None,
+    ) -> None:
+        """Manage training process.
+
+        Args:
+            cfg (DictConfig): Configurations.
+            callbacks (List[Callback], optional): Callback list. Defaults to None.
+            logger (str, optional): Logger. Defaults to None.
+        """
 
         self.cfg = cfg
         acfg = cfg.agents
@@ -44,6 +57,7 @@ class Trainer:
         )
 
     def train(self):
+
         if self.logger == "mlflow":
             self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
             self.logger.log_hparams(self.cfg)
@@ -75,7 +89,6 @@ class Trainer:
                             self.cfg.max_steps,
                             self.device,
                         )
-                        print(reward)
                         metrics, metric_name = get_metrics_dict[self.cfg.exp_name](
                             state=state,
                             reward=reward,
@@ -84,7 +97,7 @@ class Trainer:
                         if metrics[metric_name] > best_metric_step:
                             best_metric_step = metrics[metric_name]
 
-                        self.logger.log_metrics(metrics=metrics, step=step)
+                        self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
 
                         self.agent.memorize(state, action, next_state, reward, terminated)
                         self.agent.learn()
@@ -98,7 +111,9 @@ class Trainer:
                             )
 
                         if terminated or truncated:
-                            self.logger.log_metric(metric_name, best_metric_step, step=ep)
+                            self.logger.log_metric(
+                                key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
+                            )
                             # self.logger.log_metrics(metrics=metrics, step=ep)
                             self.agent.save(f"{temp_dir}/chekpoint.ckpt")
                             if best_metric_step >= best_metric_ep:
