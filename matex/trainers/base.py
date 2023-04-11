@@ -7,6 +7,7 @@ import torch
 from omegaconf import DictConfig
 from tqdm import trange
 
+from matex import Experience
 from matex.agents import DQN
 from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
@@ -51,9 +52,9 @@ class Trainer:
         env = gym.make(self.env_name, render_mode=render_mode)
         self.env = EnvWrapper(env, self.device)
 
-        ray.init()
+        # ray.init()
 
-        self.agent = DQN.remote(
+        self.agent = DQN.options(num_gpus=0).remote(
             lr=self.acfg.lr,
             gamma=self.acfg.gamma,
             memory_size=self.acfg.memory_size,
@@ -66,7 +67,6 @@ class Trainer:
         )
 
     def train(self):
-
         self._set_logger(self.logger)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -78,50 +78,63 @@ class Trainer:
 
                     state, _ = self.env.reset()
 
-                    for step in range(self.cfg.max_steps):
-                        res = self.agent.act.remote(
-                            state,
-                            eps=self.cfg.eps_max,
-                            prog_rate=ep / self.cfg.n_episodes,
-                            eps_decay=self.cfg.eps_decay,
-                            eps_min=self.cfg.eps_min,
-                        )
-                        print(type(res))
+                    def loop_step(state, best_metric_ep, best_metric_step):
+                        for step in range(self.cfg.max_steps):
+                            action_handle = self.agent.act.remote(
+                                state,
+                                eps=self.cfg.eps_max,
+                                prog_rate=ep / self.cfg.n_episodes,
+                                eps_decay=self.cfg.eps_decay,
+                                eps_min=self.cfg.eps_min,
+                            )
+                            action = ray.get(action_handle)
 
-                        next_state, reward, terminated, truncated, _ = self.env.step(action)
-                        reward = get_reward_dict[self.cfg.exp_name](
-                            reward,
-                            terminated,
-                            step,
-                            self.cfg.max_steps,
-                            self.device,
-                        )
-                        metrics, metric_name = get_metrics_dict[self.cfg.exp_name](
-                            state=state,
-                            reward=reward,
-                            step=step,
-                        )
-                        if metrics[metric_name] > best_metric_step:
-                            best_metric_step = metrics[metric_name]
+                            next_state, reward, terminated, truncated, _ = self.env.step(action)
+                            reward = get_reward_dict[self.cfg.exp_name](
+                                reward,
+                                terminated,
+                                step,
+                                self.cfg.max_steps,
+                                self.device,
+                            )
+                            metrics, metric_name = get_metrics_dict[self.cfg.exp_name](
+                                state=state,
+                                reward=reward,
+                                step=step,
+                            )
+                            if metrics[metric_name] > best_metric_step:
+                                best_metric_step = metrics[metric_name]
 
+                            experience = Experience(state, action, next_state, reward, terminated)
+                            print(experience)
+                            self.agent.memorize.remote(experience)
+                            self.agent.learn.remote()
+
+                            if terminated or truncated:
+                                self.logger.log_metric(
+                                    key=metric_name,
+                                    value=best_metric_step,
+                                    step=ep,
+                                    prefix="episode_",
+                                )
+                                self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
+                                if best_metric_step >= best_metric_ep:
+                                    best_metric_ep = best_metric_step
+                                    self.agent.save.remote(f"{temp_dir}/best.ckpt")
+                                break
+
+                            self.agent.on_step_end.remote(step, **self.acfg)
+
+                            yield step, metrics
+
+                            state = next_state
+
+                    @ray.remote(num_gpus=0)
+                    def async_process(step, metrics):
                         self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
 
-                        self.agent.memorize.remote(state, action, next_state, reward, terminated)
-                        self.agent.learn.remote()
-
-                        state = next_state
-
-                        if terminated or truncated:
-                            self.logger.log_metric(
-                                key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
-                            )
-                            self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
-                            if best_metric_step >= best_metric_ep:
-                                best_metric_ep = best_metric_step
-                                self.agent.save.remote(f"{temp_dir}/best.ckpt")
-                            break
-
-                        self.agent.on_step_end.remote(step, **self.acfg)
+                    for step, metrics in loop_step(state, best_metric_ep, best_metric_step):
+                        async_process.remote(step, metrics)
 
                     pbar.set_postfix(metric=f"{best_metric_step:.3g}")
 
@@ -135,7 +148,6 @@ class Trainer:
         from gym.wrappers import RecordVideo
 
         with tempfile.TemporaryDirectory() as temp_dir:
-
             self.load(
                 f"./experiments/results/{self.logger.experiment_id}/{self.logger.run_id}/artifacts/best.ckpt"
             )

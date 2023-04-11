@@ -4,11 +4,12 @@ import ray
 import torch
 from torch.nn import functional as F
 
-from matex.memories import Experience, Memory
+from matex import Experience
+from matex.memories import Memory
 from matex.networks import QNet
 
 
-@ray.remote
+@ray.remote(num_gpus=0)
 class DQN:
     def __init__(
         self,

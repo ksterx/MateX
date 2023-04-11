@@ -1,7 +1,6 @@
 import random
-from collections import namedtuple
 
-Experience = namedtuple("Experience", ("state", "action", "next_state", "reward", "terminated"))
+from matex import Experience
 
 
 class Memory:
@@ -10,11 +9,16 @@ class Memory:
         self.exps = []
         self.idx = 0
 
-    def add(self, state, action, next_state, reward, terminated):
+    def add(self, experience: Experience = None, **kwargs):
         if len(self.exps) < self.capacity:
             self.exps.append(None)
-
-        self.exps[self.idx] = Experience(state, action, next_state, reward, terminated)
+        if experience:
+            self.exps[self.idx] = experience
+        elif kwargs:
+            try:
+                self.exps[self.idx] = Experience(**kwargs)
+            except TypeError:
+                raise TypeError(f"kwargs must be {Experience.__annotations__}")
         self.idx = (self.idx + 1) % self.capacity
 
     def sample(self, batch_size):
