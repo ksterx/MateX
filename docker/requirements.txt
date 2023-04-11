@@ -3,3 +3,6 @@ gymnasium[all]
 tensorboard
 tqdm
 torch-tb-profiler
+ray
+hydra-core
+mlflow

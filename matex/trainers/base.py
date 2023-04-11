@@ -11,9 +11,9 @@ from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
 from matex.envs import EnvWrapper, env_name_aliases, get_metrics_dict, get_reward_dict
 
-import heartrate
+# import heartrate
 
-heartrate.trace(browser=True)
+# heartrate.trace(browser=True)
 
 
 class Trainer:
@@ -61,7 +61,6 @@ class Trainer:
         )
 
     def train(self):
-
         if self.logger == "mlflow":
             self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
             self.logger.log_hparams(self.cfg)
@@ -132,7 +131,6 @@ class Trainer:
         from gym.wrappers import RecordVideo
 
         with tempfile.TemporaryDirectory() as temp_dir:
-
             self.load(
                 f"./experiments/results/{self.logger.experiment_id}/{self.logger.run_id}/artifacts/best.ckpt"
             )

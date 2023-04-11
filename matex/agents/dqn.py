@@ -1,12 +1,15 @@
 import random
 
+import ray
 import torch
 from torch.nn import functional as F
 
-from matex.memories import Experience, Memory
+from matex import Experience
+from matex.memories import Memory
 from matex.networks import QNet
 
 
+@ray.remote
 class DQN:
     def __init__(
         self,
@@ -98,8 +101,8 @@ class DQN:
     def load(self, ckpt_path):
         self.q_network.load_state_dict(torch.load(ckpt_path))
 
-    def memorize(self, state, action, next_state, reward, terminated):
-        self.memory.add(state, action, next_state, reward, terminated)
+    def memorize(self, experience: Experience = None, **kwargs):
+        self.memory.add(experience=experience, **kwargs)
 
     def _update_target_network(self, soft_update=False, tau=1.0):
         if soft_update:
