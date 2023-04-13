@@ -135,9 +135,7 @@ class Trainer:
 
                     pbar.set_postfix(metric=f"{best_metric_step:.3g}")
 
-            self.logger.log_artifact(
-                f"{temp_dir}/best.ckpt"
-            )  # FIXME: C:\\Users\\ksterx <- access denied
+            self.logger.log_artifact(f"{temp_dir}/best.ckpt")
             self.logger.log_artifact(f"{temp_dir}/chekpoint.ckpt")
         self.logger.close()
 
@@ -161,7 +159,8 @@ class Trainer:
                 for ep in pbar:
                     pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
                     while not (terminated or truncated):
-                        action = self.agent.act(state, deterministic=True)
+                        action = self.agent.act.remote(state, deterministic=True)
+                        action = ray.get(action)
                         state, _, terminated, truncated, _ = env.step(action.item())
                         state = torch.tensor(
                             state,
@@ -184,8 +183,9 @@ class Trainer:
             for ep in pbar:
                 pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
                 while not (terminated or truncated):
-                    action = self.agent.act(state, deterministic=True)
+                    action = self.agent.act.remote(state, deterministic=True)
+                    action = ray.get(action)
                     state, _, terminated, truncated, _ = env.step(action)
 
     def load(self, ckpt_path):
-        self.agent.load(ckpt_path)
+        self.agent.load.remote(ckpt_path)
