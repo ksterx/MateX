@@ -75,6 +75,19 @@ class DQN:
             -1, 1
         )
 
+        # print(
+        #     "\nstates:",
+        #     states,
+        #     "\nactions:",
+        #     actions,
+        #     "\nnext_states:",
+        #     next_states,
+        #     "\nrewards:",
+        #     rewards,
+        #     "\nterminateds:",
+        #     terminateds,
+        # )
+        # print("\n\n\n", self.q_network(states), self.q_network(states).gather(1, actions))
         self.q_network.eval()
         estimated_Qs = self.q_network(states).gather(1, actions)
 
@@ -101,8 +114,8 @@ class DQN:
     def load(self, ckpt_path):
         self.q_network.load_state_dict(torch.load(ckpt_path))
 
-    def memorize(self, experience: Experience = None, **kwargs):
-        self.memory.add(experience=experience, **kwargs)
+    def memorize(self, experience: Experience = None, *args, **kwargs):
+        self.memory.add(experience=experience, *args, **kwargs)
 
     def _update_target_network(self, soft_update=False, tau=1.0):
         if soft_update:

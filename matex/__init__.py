@@ -1,10 +1,9 @@
-from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 
 
-@dataclass
-class Experience:
+class Experience(NamedTuple):
     state: np.ndarray
     action: np.ndarray
     reward: np.ndarray

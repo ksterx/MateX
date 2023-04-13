@@ -2,10 +2,12 @@ import tempfile
 from typing import Dict, List, Optional, Union
 
 import gymnasium as gym
+import ray
 import torch
 from omegaconf import DictConfig
 from tqdm import trange
 
+from matex import Experience
 from matex.agents import DQN
 from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
@@ -45,10 +47,11 @@ class Trainer:
 
         render_mode = "human" if cfg.render else None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.num_gpus = torch.cuda.device_count()  # TODO: use cfg.num_gpus
         env = gym.make(self.env_name, render_mode=render_mode)
         self.env = EnvWrapper(env, self.device)
 
-        self.agent = DQN(
+        self.agent = DQN.options(num_gpus=self.num_gpus).remote(
             lr=self.acfg.lr,
             gamma=self.acfg.gamma,
             memory_size=self.acfg.memory_size,
@@ -76,7 +79,7 @@ class Trainer:
                     state, _ = self.env.reset()
 
                     for step in range(self.cfg.max_steps):
-                        action = self.agent.act(
+                        action = self.agent.act.remote(
                             state,
                             eps=self.cfg.eps_max,
                             prog_rate=ep / self.cfg.n_episodes,
@@ -84,7 +87,9 @@ class Trainer:
                             eps_min=self.cfg.eps_min,
                         )
 
-                        next_state, reward, terminated, truncated, _ = self.env.step(action)
+                        action = ray.get(action)
+
+                        next_state, reward, terminated, truncated, info = self.env.step(action)
                         reward = get_reward_dict[self.cfg.exp_name](
                             reward,
                             terminated,
@@ -102,8 +107,17 @@ class Trainer:
 
                         self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
 
-                        self.agent.memorize(state, action, next_state, reward, terminated)
-                        self.agent.learn()
+                        exp = Experience(
+                            state=state,
+                            action=action,
+                            reward=reward,
+                            next_state=next_state,
+                            terminated=terminated,
+                            truncated=truncated,
+                            info=info,
+                        )
+                        self.agent.memorize.remote(experience=exp)
+                        self.agent.learn.remote()
 
                         state = next_state
 
@@ -111,17 +125,19 @@ class Trainer:
                             self.logger.log_metric(
                                 key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
                             )
-                            self.agent.save(f"{temp_dir}/chekpoint.ckpt")
+                            self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
                             if best_metric_step >= best_metric_ep:
                                 best_metric_ep = best_metric_step
-                                self.agent.save(f"{temp_dir}/best.ckpt")
+                                self.agent.save.remote(f"{temp_dir}/best.ckpt")
                             break
 
-                        self.agent.on_step_end(step, **self.acfg)
+                        self.agent.on_step_end.remote(step, **self.acfg)
 
                     pbar.set_postfix(metric=f"{best_metric_step:.3g}")
 
-            self.logger.log_artifact(f"{temp_dir}/best.ckpt")
+            self.logger.log_artifact(
+                f"{temp_dir}/best.ckpt"
+            )  # FIXME: C:\\Users\\ksterx <- access denied
             self.logger.log_artifact(f"{temp_dir}/chekpoint.ckpt")
         self.logger.close()
 
