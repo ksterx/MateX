@@ -3,7 +3,7 @@ import ray
 from omegaconf import DictConfig, OmegaConf
 
 from matex.common import notice
-from matex.trainers import Trainer
+from matex.trainers import MultiEnvTrainer, Trainer
 
 
 @hydra.main(config_path="config", config_name="config", version_base=None)
@@ -19,7 +19,12 @@ def main(cfg: DictConfig) -> None:
     except KeyError:
         notice.warning("No GPUs available!")
 
-    trainer = Trainer(cfg, logger="mlflow")
+    if cfg.num_envs == 1:
+        trainer = Trainer(cfg, logger="mlflow")
+    elif cfg.num_envs > 1:
+        trainer = MultiEnvTrainer(cfg, logger="mlflow")
+    else:
+        raise ValueError(f"Invalid number of environments: {cfg.num_envs}")
     trainer.train()
     trainer.test()
     trainer.play()

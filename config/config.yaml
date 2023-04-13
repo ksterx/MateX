@@ -2,8 +2,8 @@ debug: true
 mlflow_uri: file:./experiments/results
 exp_name: cartpole
 
-n_envs: 4
-n_episodes: 1000
+num_envs: 4
+num_episodes: 1000
 max_steps: 500
 eps_max: 1.0
 eps_min: 0.01

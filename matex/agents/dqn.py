@@ -22,6 +22,7 @@ class DQN:
         hidden_size,
         device,
         is_ddqn=True,
+        id: int = 0,
     ):
         self.lr = lr
         self.gamma = gamma
@@ -30,6 +31,7 @@ class DQN:
         self.device = device
         self.action_size = action_size
         self.is_ddqn = is_ddqn
+        self.id = id
 
         self.q_network = QNet(state_size, action_size, hidden_size, self.device).to(self.device)
         self.target_network = QNet(state_size, action_size, hidden_size, self.device).to(
@@ -75,19 +77,6 @@ class DQN:
             -1, 1
         )
 
-        # print(
-        #     "\nstates:",
-        #     states,
-        #     "\nactions:",
-        #     actions,
-        #     "\nnext_states:",
-        #     next_states,
-        #     "\nrewards:",
-        #     rewards,
-        #     "\nterminateds:",
-        #     terminateds,
-        # )
-        # print("\n\n\n", self.q_network(states), self.q_network(states).gather(1, actions))
         self.q_network.eval()
         estimated_Qs = self.q_network(states).gather(1, actions)
 

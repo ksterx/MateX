@@ -38,7 +38,7 @@ class Notice:
         print(f"{self._bold_red}[CRITICAL] {msg}{self._reset}")
 
 
-def play_agent(env_name, ckpt_path, n_episodes=10):
+def play_agent(env_name, ckpt_path, num_episodes=10):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     env = gym.make(env_name, render_mode="human")
     agent = DQN.load(
@@ -54,7 +54,7 @@ def play_agent(env_name, ckpt_path, n_episodes=10):
     state = torch.tensor(state, device=device, dtype=torch.float).view(1, -1)
     terminated = False
 
-    with trange(n_episodes) as pbar:
+    with trange(num_episodes) as pbar:
         for ep in pbar:
             pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
             while not terminated:
