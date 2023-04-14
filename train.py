@@ -25,6 +25,7 @@ def main(cfg: DictConfig) -> None:
         trainer = MultiEnvTrainer(cfg, logger="mlflow")
     else:
         raise ValueError(f"Invalid number of environments: {cfg.num_envs}")
+
     trainer.train()
     trainer.test()
     trainer.play()

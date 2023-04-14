@@ -1,6 +1,6 @@
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import List, Union
 
 import gymnasium as gym
 import ray
@@ -51,6 +51,7 @@ class Trainer:
         self.num_gpus = torch.cuda.device_count()  # TODO: use cfg.num_gpus
         self.env = self._make_env(num_envs=cfg.num_envs)
 
+        # Load agent(s)
         if int(cfg.num_envs) == 1:
             self.agent = DQN.options(num_gpus=self.num_gpus).remote(
                 lr=self.acfg.lr,
@@ -64,8 +65,24 @@ class Trainer:
                 is_ddqn=self.acfg.is_ddqn,
                 id=0,
             )
+
         elif int(cfg.num_envs) > 1:
-            pass
+            self.agents = [
+                DQN.options(num_gpus=self.num_gpus / cfg.num_envs).remote(
+                    lr=self.acfg.lr,
+                    gamma=self.acfg.gamma,
+                    memory_size=self.acfg.memory_size,
+                    batch_size=self.acfg.batch_size,
+                    state_size=self.env.observation_space.shape[0],
+                    action_size=self.env.action_space.nvec.shape[0],
+                    hidden_size=self.acfg.hidden_size,
+                    device=self.device,
+                    is_ddqn=self.acfg.is_ddqn,
+                    id=i,
+                )
+                for i in range(self.cfg.num_envs)
+            ]
+
         else:
             raise ValueError(f"Invalid number of environments: {cfg.num_envs}")
 
@@ -143,22 +160,30 @@ class Trainer:
             self.logger.log_artifact(f"{temp_dir}/chekpoint.ckpt")
         self.logger.close()
 
-    def test(self, num_episodes=3):
+    def test(self, num_episodes: int = 3):
         GIF_NAME = "test.gif"
         with tempfile.TemporaryDirectory() as temp_dir:
-            self.load(
-                Path().cwd()
-                / Path("experiments/results")
-                / self.logger.experiment_id
-                / self.logger.run_id
-                / Path("artifacts/best.ckpt")
-            )
+
+            # Load best checkpoint
+            try:
+                self.load(
+                    Path().cwd()
+                    / Path("experiments/results")
+                    / self.logger.experiment_id
+                    / self.logger.run_id
+                    / Path("artifacts/best.ckpt")
+                )
+            except FileNotFoundError as e:
+                notice.error("Could not find best.ckpt file in artifacts directory")
+                raise e
+
+            # Prepare environment
             env = gym.make(self.env_name, render_mode="rgb_array")
             env = MatexEnv(env, self.device, record=True)
-
             state, _ = env.reset()
             terminated, truncated = False, False
 
+            # Play episodes
             with trange(num_episodes) as pbar:
                 for ep in pbar:
                     pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
@@ -167,16 +192,18 @@ class Trainer:
                         action = ray.get(action)
                         state, _, terminated, truncated, _ = env.step(action)
 
+            # Save gif
             env.save_gif(temp_dir, GIF_NAME)
-
             self.logger.log_artifact(f"{temp_dir}/{GIF_NAME}")
 
-    def play(self, num_episodes=3):
+    def play(self, num_episodes: int = 3):
+        # Prepare environment
         env = gym.make(self.env_name, render_mode="human")
         env = MatexEnv(env, self.device)
         state, _ = env.reset()
         terminated, truncated = False, False
 
+        # Play episodes
         with trange(num_episodes) as pbar:
             for ep in pbar:
                 pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
@@ -189,6 +216,7 @@ class Trainer:
         self.agent.load.remote(ckpt_path)
 
     def _set_logger(self):
+        # Convert logger name to logger object
         if self.logger == "mlflow":
             self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
             self.logger.log_hparams(self.cfg)
@@ -197,7 +225,9 @@ class Trainer:
         self,
         num_envs: int = 1,
         render_mode: str = "human",
-    ):
+    ) -> Union[gym.Env, gym.vector.VectorEnv]:
+
+        # Prepare environment for training
         if int(num_envs) == 1:
             env = gym.make(self.env_name, render_mode=render_mode)
             env = MatexEnv(env, self.device)
