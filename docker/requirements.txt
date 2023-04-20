@@ -1,5 +1,13 @@
 torch
+torchvision
+swig
 gymnasium[all]
 tensorboard
 tqdm
 torch-tb-profiler
+ray
+hydra-core
+mlflow
+jupyterlab
+black
+flake8

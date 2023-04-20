@@ -1,19 +1,23 @@
+import os
 import tempfile
-from typing import Dict, List, Optional, Union
+from pathlib import Path
+from typing import List, Union
 
 import gymnasium as gym
+import ray
 import torch
 from omegaconf import DictConfig
 from tqdm import trange
 
+from matex import Experience
 from matex.agents import DQN
 from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
-from matex.envs import EnvWrapper, env_name_aliases, get_metrics_dict, get_reward_dict
+from matex.envs import RayEnv, env_name_aliases, get_metrics_dict, get_reward_func
 
-import heartrate
+# import heartrate
 
-heartrate.trace(browser=True)
+# heartrate.trace(browser=True)
 
 
 class Trainer:
@@ -43,12 +47,165 @@ class Trainer:
                 f"Registerd envs at matex.envs.env_name_aliases: {[k for k in env_name_aliases.keys()]}"
             )
 
-        render_mode = "human" if cfg.render else None
+        self.render_mode = "human" if cfg.render else None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        env = gym.make(self.env_name, render_mode=render_mode)
-        self.env = EnvWrapper(env, self.device)
+        self.num_gpus = torch.cuda.device_count()  # TODO: use cfg.num_gpus
+        self.env, self.env_ref = self._make_env(num_envs=cfg.num_envs)
 
-        self.agent = DQN(
+        # Set agent(s)
+        self._set_agent()
+
+    def train(self):
+        self._set_logger()
+
+        num_episodes = self.cfg.num_episodes if not self.cfg.debug else 3
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with trange(num_episodes) as pbar:
+                best_metric_ep = -float("inf")
+                for ep in pbar:
+                    pbar.set_description(f"[TRAIN] Episode: {ep+1:>5}")
+                    best_metric_step = -float("inf")
+
+                    state, _ = ray.get(self.env_ref.reset.remote())
+
+                    for step in range(self.cfg.max_steps):
+                        action = ray.get(
+                            self.agent.act.remote(
+                                state,
+                                eps=self.cfg.eps_max,
+                                prog_rate=ep / self.cfg.num_episodes,
+                                eps_min=self.cfg.eps_min,
+                            )
+                        ).cpu()
+
+                        next_state, reward, terminated, truncated, info = ray.get(
+                            self.env_ref.step.remote(action)
+                        )
+
+                        reward = ray.get(
+                            get_reward_func[self.cfg.exp_name].remote(
+                                reward=reward,
+                                next_state=next_state,
+                                terminated=terminated,
+                                step=step,
+                                max_steps=self.cfg.max_steps,
+                                device=torch.device("cpu"),
+                            )
+                        )
+                        metrics, metric_name = ray.get(
+                            get_metrics_dict[self.cfg.exp_name].remote(
+                                state=state,
+                                reward=reward,
+                                step=step,
+                            )
+                        )
+                        if metrics[metric_name] > best_metric_step:
+                            best_metric_step = metrics[metric_name]
+
+                        self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
+
+                        exp = Experience(
+                            state=state,
+                            action=action,
+                            reward=reward,
+                            next_state=next_state,
+                            terminated=terminated,
+                            truncated=truncated,
+                            info=info,
+                        )
+                        self.agent.memorize.remote(experience=exp)
+                        self.agent.learn.remote()
+
+                        state = next_state
+
+                        if terminated or truncated:
+                            self.logger.log_metric(
+                                key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
+                            )
+                            self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
+                            if best_metric_step >= best_metric_ep:
+                                best_metric_ep = best_metric_step
+                                self.agent.save.remote(f"{temp_dir}/best.ckpt")
+                            break
+
+                        self.agent.on_step_end.remote(step, **self.acfg)
+
+                    pbar.set_postfix(metric=f"{best_metric_step:.3g}")
+
+            self.logger.log_artifact(f"{temp_dir}/best.ckpt")
+            self.logger.log_artifact(f"{temp_dir}/chekpoint.ckpt")
+        self.logger.close()
+
+    def test(self, num_episodes: int = 3):
+        GIF_NAME = "test.gif"
+
+        # Load best checkpoint
+        try:
+            self.load(
+                Path().cwd()
+                / Path("experiments/results")
+                / self.logger.experiment_id
+                / self.logger.run_id
+                / Path("artifacts/best.ckpt")
+            )
+        except FileNotFoundError as e:
+            notice.error("Could not find best.ckpt file in artifacts directory")
+            raise e
+
+        # Prepare environment
+        env = gym.make(self.env_name, render_mode="rgb_array")
+        env = RayEnv.options(num_cpus=1).remote(env, self.device, record=True)
+        state, _ = ray.get(env.reset.remote())
+        terminated, truncated = False, False
+
+        # Play episodes
+        with trange(num_episodes) as pbar:
+            for ep in pbar:
+                pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
+                while not (terminated or truncated):
+                    action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
+                    state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
+
+        # Save gif (DO NOT USE Tempfile)
+        env.save_gif.remote(os.getcwd(), GIF_NAME)
+        self.logger.log_artifact(GIF_NAME)
+
+    def play(self, num_episodes: int = 3):
+        # Prepare environment
+        env = gym.make(self.env_name, render_mode="human")
+        env = RayEnv.options(num_cpus=1).remote(env, self.device)
+        state, _ = ray.get(env.reset.remote())
+        terminated, truncated = False, False
+
+        # Play episodes
+        with trange(num_episodes) as pbar:
+            for ep in pbar:
+                pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
+                while not (terminated or truncated):
+                    action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
+                    state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
+
+    def load(self, ckpt_path):
+        self.agent.load.remote(ckpt_path)
+
+    def _set_logger(self):
+        # Convert logger name to logger object
+        if self.logger == "mlflow":
+            self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
+            self.logger.log_hparams(self.cfg)
+
+    def _make_env(
+        self,
+        num_envs: int = 1,
+        render_mode: str = "human",
+    ) -> Union[gym.Env, gym.vector.VectorEnv]:
+        # Prepare environment for training
+        env = gym.make(self.env_name, render_mode=render_mode)
+        env_ref = RayEnv.options(num_cpus=1).remote(env, torch.device("cpu"))
+        return env, env_ref
+
+    def _set_agent(self):
+        self.agent = DQN.options(num_gpus=self.num_gpus).remote(
             lr=self.acfg.lr,
             gamma=self.acfg.gamma,
             memory_size=self.acfg.memory_size,
@@ -58,120 +215,5 @@ class Trainer:
             hidden_size=self.acfg.hidden_size,
             device=self.device,
             is_ddqn=self.acfg.is_ddqn,
+            id=0,
         )
-
-    def train(self):
-
-        if self.logger == "mlflow":
-            self.logger = MLFlowLogger(tracking_uri=self.cfg.mlflow_uri, cfg=self.cfg)
-            self.logger.log_hparams(self.cfg)
-
-        n_episodes = self.cfg.n_episodes if not self.cfg.debug else 10
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with trange(n_episodes) as pbar:
-                best_metric_ep = -float("inf")
-                for ep in pbar:
-                    pbar.set_description(f"[TRAIN] Episode: {ep+1:>5}")
-                    best_metric_step = -float("inf")
-
-                    state, _ = self.env.reset()
-
-                    for step in range(self.cfg.max_steps):
-                        action = self.agent.act(
-                            state,
-                            eps=self.cfg.eps_max,
-                            prog_rate=ep / self.cfg.n_episodes,
-                            eps_decay=self.cfg.eps_decay,
-                            eps_min=self.cfg.eps_min,
-                        )
-
-                        next_state, reward, terminated, truncated, _ = self.env.step(action)
-                        reward = get_reward_dict[self.cfg.exp_name](
-                            reward,
-                            terminated,
-                            step,
-                            self.cfg.max_steps,
-                            self.device,
-                        )
-                        metrics, metric_name = get_metrics_dict[self.cfg.exp_name](
-                            state=state,
-                            reward=reward,
-                            step=step,
-                        )
-                        if metrics[metric_name] > best_metric_step:
-                            best_metric_step = metrics[metric_name]
-
-                        self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
-
-                        self.agent.memorize(state, action, next_state, reward, terminated)
-                        self.agent.learn()
-
-                        state = next_state
-
-                        if terminated or truncated:
-                            self.logger.log_metric(
-                                key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
-                            )
-                            self.agent.save(f"{temp_dir}/chekpoint.ckpt")
-                            if best_metric_step >= best_metric_ep:
-                                best_metric_ep = best_metric_step
-                                self.agent.save(f"{temp_dir}/best.ckpt")
-                            break
-
-                        self.agent.on_step_end(step, **self.acfg)
-
-                    pbar.set_postfix(metric=f"{best_metric_step:.3g}")
-
-            self.logger.log_artifact(f"{temp_dir}/best.ckpt")
-            self.logger.log_artifact(f"{temp_dir}/chekpoint.ckpt")
-        self.logger.close()
-
-    def test(self, n_episodes=3):
-        import gym
-        import moviepy.editor as mpy
-        from gym.wrappers import RecordVideo
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-
-            self.load(
-                f"./experiments/results/{self.logger.experiment_id}/{self.logger.run_id}/artifacts/best.ckpt"
-            )
-            env = gym.make(self.env_name, render_mode="rgb_array")
-            env = RecordVideo(env, f"{temp_dir}")
-
-            state, _ = env.reset()
-            state = torch.tensor(state, device=self.device, dtype=torch.float).view(1, -1)
-            terminated, truncated = False, False
-
-            with trange(n_episodes) as pbar:
-                for ep in pbar:
-                    pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
-                    while not (terminated or truncated):
-                        action = self.agent.act(state, deterministic=True)
-                        state, _, terminated, truncated, _ = env.step(action.item())
-                        state = torch.tensor(
-                            state,
-                            device=self.device,
-                            dtype=torch.float,
-                        ).view(1, -1)
-
-            movie = mpy.VideoFileClip(f"{temp_dir}/rl-video-episode-0.mp4")
-            movie.write_gif(f"{temp_dir}/result.gif")
-
-            self.logger.log_artifact(f"{temp_dir}/result.gif")
-
-    def play(self, n_episodes=3):
-        env = gym.make(self.env_name, render_mode="human")
-        env = EnvWrapper(env, self.device)
-        state, _ = env.reset()
-        terminated, truncated = False, False
-
-        with trange(n_episodes) as pbar:
-            for ep in pbar:
-                pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
-                while not (terminated or truncated):
-                    action = self.agent.act(state, deterministic=True)
-                    state, _, terminated, truncated, _ = env.step(action)
-
-    def load(self, ckpt_path):
-        self.agent.load(ckpt_path)

@@ -16,7 +16,7 @@ def train():
     GAMMA = 0.99
     MEMORY_SIZE = 10000
     BATCH_SIZE = 128
-    N_EPISODES = 10
+    NUM_EPISODES = 10
     MAX_STEPS = 200
     EPSILON = 0.1
     EPSILON_DECAY = 0.99
@@ -37,7 +37,7 @@ def train():
         device=device,
     )
 
-    with trange(N_EPISODES) as pbar:
+    with trange(NUM_EPISODES) as pbar:
         for ep in pbar:
             pbar.set_description(f"Episode: {ep:>5}")
 
@@ -48,7 +48,7 @@ def train():
                 action = agent.act(
                     state,
                     eps=EPSILON,
-                    prog_rate=ep / N_EPISODES,
+                    prog_rate=ep / NUM_EPISODES,
                     eps_decay=EPSILON_DECAY,
                     eps_min=EPSILON_MIN,
                 )

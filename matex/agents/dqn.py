@@ -1,24 +1,30 @@
 import random
 
+import ray
 import torch
 from torch.nn import functional as F
 
-from matex.memories import Experience, Memory
+from matex import Experience
+from matex.memories import Memory
 from matex.networks import QNet
 
+from .base import Agent
 
-class DQN:
+
+@ray.remote
+class DQN(Agent):
     def __init__(
         self,
-        lr,
-        gamma,
-        memory_size,
-        batch_size,
-        state_size,
-        action_size,
-        hidden_size,
-        device,
-        is_ddqn=True,
+        lr: float,
+        gamma: float,
+        memory_size: int,
+        batch_size: int,
+        state_size: int,
+        action_size: int,
+        hidden_size: int,
+        device: torch.device,
+        is_ddqn: bool = True,
+        id: int = 0,
     ):
         self.lr = lr
         self.gamma = gamma
@@ -27,13 +33,23 @@ class DQN:
         self.device = device
         self.action_size = action_size
         self.is_ddqn = is_ddqn
+        self.id = id
 
-        self.q_network = QNet(state_size, action_size, hidden_size, self.device).to(self.device)
-        self.target_network = QNet(state_size, action_size, hidden_size, self.device).to(
-            self.device
-        )
+        self.q_network = QNet(
+            state_size,
+            action_size,
+            hidden_size,
+            self.device,
+        ).to(self.device)
+
+        self.target_network = QNet(
+            state_size,
+            action_size,
+            hidden_size,
+            self.device,
+        ).to(self.device)
+
         self.target_network.load_state_dict(self.q_network.state_dict())
-
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.lr)
 
     def act(
@@ -41,16 +57,19 @@ class DQN:
         state,
         eps=0.1,
         prog_rate=0,
-        eps_decay=1.0,
         eps_min=0.01,
         deterministic=False,
     ):
         if deterministic:
             with torch.no_grad():
+                if state.device != self.device:
+                    state = state.to(self.device)
                 return torch.argmax(self.q_network(state)).view(1, 1)
         else:
-            if random.random() > max(eps * eps_decay * (1 - prog_rate), eps_min):
+            if random.random() > max(eps * (1 - prog_rate), eps_min):
                 with torch.no_grad():
+                    if state.device != self.device:
+                        state = state.to(self.device)
                     return torch.argmax(self.q_network(state)).view(1, 1)
             else:
                 return torch.tensor(
@@ -98,8 +117,8 @@ class DQN:
     def load(self, ckpt_path):
         self.q_network.load_state_dict(torch.load(ckpt_path))
 
-    def memorize(self, state, action, next_state, reward, terminated):
-        self.memory.add(state, action, next_state, reward, terminated)
+    def memorize(self, experience: Experience = None, *args, **kwargs):
+        self.memory.add(experience=experience, *args, **kwargs)
 
     def _update_target_network(self, soft_update=False, tau=1.0):
         if soft_update:

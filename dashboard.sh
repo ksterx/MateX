@@ -1,3 +1,5 @@
+set -eu
+
 if [ "$(uname)" == 'Darwin' ]; then
     open http://127.0.0.1:5000/
 elif [ "$(expr substr $(uname -s) 1 5)" == 'Linux' ]; then

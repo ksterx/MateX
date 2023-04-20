@@ -71,7 +71,7 @@ class MLFlowLogger(Logger):
 
         self.experiment = self.client.get_experiment_by_name(exp_name)
         if self.experiment is None:
-            self.experiment_id = self.client.create_experiment(exp_name)
+            self.experiment_id = self.client.create_experiment(name=exp_name)
             self.experiment = self.client.get_experiment(self.experiment_id)
         else:
             self.experiment_id = self.experiment.experiment_id
@@ -99,7 +99,6 @@ class MLFlowLogger(Logger):
             self.log_metric(k, v, step, prefix)
 
     def log_hparams(self, params: Union[Dict[str, Any], DictConfig]) -> None:
-
         if isinstance(params, DictConfig):
             params = OmegaConf.to_container(params, resolve=True)
             params = flatten_dict(params)

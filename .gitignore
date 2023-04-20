@@ -282,6 +282,8 @@ $RECYCLE.BIN/
 .jupyter/
 runs/
 .hypothesis/
-experiments/
+results/
 mlruns/
 .trash/
+.vscode/
+/test.gif
