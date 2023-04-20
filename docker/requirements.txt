@@ -1,4 +1,6 @@
 torch
+torchvision
+swig
 gymnasium[all]
 tensorboard
 tqdm

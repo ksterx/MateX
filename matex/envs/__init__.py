@@ -4,7 +4,7 @@ from .lunarlander import get_metrics_lunarlander, get_reward_lunarlander
 from .mountaincar import get_metrics_mountaincar, get_reward_mountaincar
 from .wrappers import MatexEnv, VecMatexEnv
 
-get_reward_dict = {
+get_reward_func = {
     "cartpole": get_reward_cartpole,
     "acrobot": get_reward_acrobot,
     "mountaincar": get_reward_mountaincar,

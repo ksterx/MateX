@@ -12,7 +12,7 @@ from matex import Experience
 from matex.agents import DQN
 from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
-from matex.envs import MatexEnv, VecMatexEnv, env_name_aliases, get_metrics_dict, get_reward_dict
+from matex.envs import MatexEnv, VecMatexEnv, env_name_aliases, get_metrics_dict, get_reward_func
 
 # import heartrate
 
@@ -51,40 +51,8 @@ class Trainer:
         self.num_gpus = torch.cuda.device_count()  # TODO: use cfg.num_gpus
         self.env = self._make_env(num_envs=cfg.num_envs)
 
-        # Load agent(s)
-        if int(cfg.num_envs) == 1:
-            self.agent = DQN.options(num_gpus=self.num_gpus).remote(
-                lr=self.acfg.lr,
-                gamma=self.acfg.gamma,
-                memory_size=self.acfg.memory_size,
-                batch_size=self.acfg.batch_size,
-                state_size=self.env.observation_space.shape[0],
-                action_size=self.env.action_space.n,
-                hidden_size=self.acfg.hidden_size,
-                device=self.device,
-                is_ddqn=self.acfg.is_ddqn,
-                id=0,
-            )
-
-        elif int(cfg.num_envs) > 1:
-            self.agents = [
-                DQN.options(num_gpus=self.num_gpus / cfg.num_envs).remote(
-                    lr=self.acfg.lr,
-                    gamma=self.acfg.gamma,
-                    memory_size=self.acfg.memory_size,
-                    batch_size=self.acfg.batch_size,
-                    state_size=self.env.observation_space.shape[0],
-                    action_size=self.env.action_space.nvec.shape[0],
-                    hidden_size=self.acfg.hidden_size,
-                    device=self.device,
-                    is_ddqn=self.acfg.is_ddqn,
-                    id=i,
-                )
-                for i in range(self.cfg.num_envs)
-            ]
-
-        else:
-            raise ValueError(f"Invalid number of environments: {cfg.num_envs}")
+        # Set agent(s)
+        self._set_agent()
 
     def train(self):
         self._set_logger()
@@ -100,23 +68,27 @@ class Trainer:
                     state, _ = self.env.reset()
 
                     for step in range(self.cfg.max_steps):
-                        action = self.agent.act.remote(
-                            state,
-                            eps=self.cfg.eps_max,
-                            prog_rate=ep / self.cfg.num_episodes,
-                            eps_decay=self.cfg.eps_decay,
-                            eps_min=self.cfg.eps_min,
-                        )
+                        action = [
+                            agent.act.remote(
+                                state[i],
+                                eps=self.cfg.eps_max,
+                                prog_rate=ep / self.cfg.num_episodes,
+                                eps_decay=self.cfg.eps_decay,
+                                eps_min=self.cfg.eps_min,
+                            )
+                            for i, agent in enumerate(self.agents)
+                        ]  # TODO: Check order of state
 
                         action = ray.get(action)
 
                         next_state, reward, terminated, truncated, info = self.env.step(action)
-                        reward = get_reward_dict[self.cfg.exp_name](
-                            reward,
-                            terminated,
-                            step,
-                            self.cfg.max_steps,
-                            self.device,
+                        reward = get_reward_func[self.cfg.exp_name](
+                            reward=reward,
+                            next_state=next_state,
+                            terminated=terminated,
+                            step=step,
+                            max_steps=self.cfg.max_steps,
+                            device=self.device,
                         )
                         metrics, metric_name = get_metrics_dict[self.cfg.exp_name](
                             state=state,
@@ -163,7 +135,6 @@ class Trainer:
     def test(self, num_episodes: int = 3):
         GIF_NAME = "test.gif"
         with tempfile.TemporaryDirectory() as temp_dir:
-
             # Load best checkpoint
             try:
                 self.load(
@@ -226,7 +197,6 @@ class Trainer:
         num_envs: int = 1,
         render_mode: str = "human",
     ) -> Union[gym.Env, gym.vector.VectorEnv]:
-
         # Prepare environment for training
         if int(num_envs) == 1:
             env = gym.make(self.env_name, render_mode=render_mode)
@@ -240,3 +210,17 @@ class Trainer:
             return env
         else:
             raise ValueError(f"Invalid number of environments: {num_envs}")
+
+    def _set_agent(self):
+        self.agent = DQN.options(num_gpus=self.num_gpus).remote(
+            lr=self.acfg.lr,
+            gamma=self.acfg.gamma,
+            memory_size=self.acfg.memory_size,
+            batch_size=self.acfg.batch_size,
+            state_size=self.env.observation_space.shape[0],
+            action_size=self.env.action_space.n,
+            hidden_size=self.acfg.hidden_size,
+            device=self.device,
+            is_ddqn=self.acfg.is_ddqn,
+            id=0,
+        )

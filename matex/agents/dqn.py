@@ -8,9 +8,11 @@ from matex import Experience
 from matex.memories import Memory
 from matex.networks import QNet
 
+from .base import Agent
+
 
 @ray.remote
-class DQN:
+class DQN(Agent):
     def __init__(
         self,
         lr,
