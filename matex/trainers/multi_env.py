@@ -1,12 +1,13 @@
 import tempfile
 from typing import Dict, List, Optional, Union
 
+import gymnasium as gym
 import ray
 from tqdm import tqdm
 
 from matex import Experience
 from matex.agents import DQN
-from matex.envs import get_metrics_dict, get_reward_func
+from matex.envs import RayEnv, get_metrics_dict, get_reward_func
 
 from .base import Trainer
 
@@ -44,7 +45,7 @@ class MultiEnvTrainer(Trainer):
                             eps_min=self.cfg.eps_min,
                         )
                         for i, agent in enumerate(self.agents)
-                    ]
+                    ]  # TODO: Check order of state
 
                     action = ray.get(action)
                     next_state, reward, terminated, truncated, info = self.env.step(action)
@@ -99,6 +100,16 @@ class MultiEnvTrainer(Trainer):
             self.logger.log_artifact(f"{temp_dir}/best.ckpt")
             self.logger.log_artifact(f"{temp_dir}/chekpoint.ckpt")
         self.logger.close()
+
+    def _make_env(
+        self,
+        num_envs: int = 4,
+        render_mode: str = "human",
+    ) -> Union[gym.Env, gym.vector.VectorEnv]:
+        # Prepare environment for training
+        env = gym.make(self.env_name, render_mode=render_mode)
+        env_obj = [RayEnv.remote(env, self.device) for _ in range(num_envs)]
+        return env, env_obj
 
     def _set_agent(self):
         self.agents = [

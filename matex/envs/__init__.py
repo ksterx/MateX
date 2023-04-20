@@ -2,7 +2,7 @@ from .acrobot import get_metrics_acrobot, get_reward_acrobot
 from .cartpole import get_metrics_cartpole, get_reward_cartpole
 from .lunarlander import get_metrics_lunarlander, get_reward_lunarlander
 from .mountaincar import get_metrics_mountaincar, get_reward_mountaincar
-from .wrappers import MatexEnv, VecMatexEnv
+from .wrappers import RayEnv
 
 get_reward_func = {
     "cartpole": get_reward_cartpole,

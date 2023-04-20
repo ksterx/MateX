@@ -1,3 +1,4 @@
+import os
 import tempfile
 from pathlib import Path
 from typing import List, Union
@@ -12,7 +13,7 @@ from matex import Experience
 from matex.agents import DQN
 from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
-from matex.envs import MatexEnv, VecMatexEnv, env_name_aliases, get_metrics_dict, get_reward_func
+from matex.envs import RayEnv, env_name_aliases, get_metrics_dict, get_reward_func
 
 # import heartrate
 
@@ -49,7 +50,7 @@ class Trainer:
         self.render_mode = "human" if cfg.render else None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_gpus = torch.cuda.device_count()  # TODO: use cfg.num_gpus
-        self.env = self._make_env(num_envs=cfg.num_envs)
+        self.env, self.env_ref = self._make_env(num_envs=cfg.num_envs)
 
         # Set agent(s)
         self._set_agent()
@@ -65,35 +66,38 @@ class Trainer:
                     pbar.set_description(f"[TRAIN] Episode: {ep+1:>5}")
                     best_metric_step = -float("inf")
 
-                    state, _ = self.env.reset()
+                    state, _ = ray.get(self.env_ref.reset.remote())
 
                     for step in range(self.cfg.max_steps):
-                        action = [
-                            agent.act.remote(
-                                state[i],
+                        action = ray.get(
+                            self.agent.act.remote(
+                                state,
                                 eps=self.cfg.eps_max,
                                 prog_rate=ep / self.cfg.num_episodes,
-                                eps_decay=self.cfg.eps_decay,
                                 eps_min=self.cfg.eps_min,
                             )
-                            for i, agent in enumerate(self.agents)
-                        ]  # TODO: Check order of state
+                        ).cpu()
 
-                        action = ray.get(action)
-
-                        next_state, reward, terminated, truncated, info = self.env.step(action)
-                        reward = get_reward_func[self.cfg.exp_name](
-                            reward=reward,
-                            next_state=next_state,
-                            terminated=terminated,
-                            step=step,
-                            max_steps=self.cfg.max_steps,
-                            device=self.device,
+                        next_state, reward, terminated, truncated, info = ray.get(
+                            self.env_ref.step.remote(action)
                         )
-                        metrics, metric_name = get_metrics_dict[self.cfg.exp_name](
-                            state=state,
-                            reward=reward,
-                            step=step,
+
+                        reward = ray.get(
+                            get_reward_func[self.cfg.exp_name].remote(
+                                reward=reward,
+                                next_state=next_state,
+                                terminated=terminated,
+                                step=step,
+                                max_steps=self.cfg.max_steps,
+                                device=torch.device("cpu"),
+                            )
+                        )
+                        metrics, metric_name = ray.get(
+                            get_metrics_dict[self.cfg.exp_name].remote(
+                                state=state,
+                                reward=reward,
+                                step=step,
+                            )
                         )
                         if metrics[metric_name] > best_metric_step:
                             best_metric_step = metrics[metric_name]
@@ -134,6 +138,7 @@ class Trainer:
 
     def test(self, num_episodes: int = 3):
         GIF_NAME = "test.gif"
+
         with tempfile.TemporaryDirectory() as temp_dir:
             # Load best checkpoint
             try:
@@ -150,8 +155,8 @@ class Trainer:
 
             # Prepare environment
             env = gym.make(self.env_name, render_mode="rgb_array")
-            env = MatexEnv(env, self.device, record=True)
-            state, _ = env.reset()
+            env = RayEnv.options(num_cpus=1).remote(env, self.device, record=True)
+            state, _ = ray.get(env.reset.remote())
             terminated, truncated = False, False
 
             # Play episodes
@@ -159,19 +164,18 @@ class Trainer:
                 for ep in pbar:
                     pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
                     while not (terminated or truncated):
-                        action = self.agent.act.remote(state, deterministic=True)
-                        action = ray.get(action)
-                        state, _, terminated, truncated, _ = env.step(action)
+                        action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
+                        state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
 
             # Save gif
-            env.save_gif(temp_dir, GIF_NAME)
-            self.logger.log_artifact(f"{temp_dir}/{GIF_NAME}")
+            env.save_gif.remote(temp_dir, GIF_NAME)
+            self.logger.log_artifact(os.path.join(temp_dir, GIF_NAME))
 
     def play(self, num_episodes: int = 3):
         # Prepare environment
         env = gym.make(self.env_name, render_mode="human")
-        env = MatexEnv(env, self.device)
-        state, _ = env.reset()
+        env = RayEnv.options(num_cpus=1).remote(env, self.device)
+        state, _ = ray.get(env.reset.remote())
         terminated, truncated = False, False
 
         # Play episodes
@@ -179,9 +183,8 @@ class Trainer:
             for ep in pbar:
                 pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
                 while not (terminated or truncated):
-                    action = self.agent.act.remote(state, deterministic=True)
-                    action = ray.get(action)
-                    state, _, terminated, truncated, _ = env.step(action)
+                    action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
+                    state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
 
     def load(self, ckpt_path):
         self.agent.load.remote(ckpt_path)
@@ -198,18 +201,9 @@ class Trainer:
         render_mode: str = "human",
     ) -> Union[gym.Env, gym.vector.VectorEnv]:
         # Prepare environment for training
-        if int(num_envs) == 1:
-            env = gym.make(self.env_name, render_mode=render_mode)
-            env = MatexEnv(env, self.device)
-            return env
-        elif int(num_envs) > 1:
-            env = gym.vector.make(
-                self.env_name, render_mode=render_mode, num_envs=self.cfg.num_envs
-            )
-            env = VecMatexEnv(env, self.device)
-            return env
-        else:
-            raise ValueError(f"Invalid number of environments: {num_envs}")
+        env = gym.make(self.env_name, render_mode=render_mode)
+        env_ref = RayEnv.options(num_cpus=1).remote(env, torch.device("cpu"))
+        return env, env_ref
 
     def _set_agent(self):
         self.agent = DQN.options(num_gpus=self.num_gpus).remote(

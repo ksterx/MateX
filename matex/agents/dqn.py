@@ -35,12 +35,21 @@ class DQN(Agent):
         self.is_ddqn = is_ddqn
         self.id = id
 
-        self.q_network = QNet(state_size, action_size, hidden_size, self.device).to(self.device)
-        self.target_network = QNet(state_size, action_size, hidden_size, self.device).to(
-            self.device
-        )
-        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.q_network = QNet(
+            state_size,
+            action_size,
+            hidden_size,
+            self.device,
+        ).to(self.device)
 
+        self.target_network = QNet(
+            state_size,
+            action_size,
+            hidden_size,
+            self.device,
+        ).to(self.device)
+
+        self.target_network.load_state_dict(self.q_network.state_dict())
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.lr)
 
     def act(
@@ -48,16 +57,19 @@ class DQN(Agent):
         state,
         eps=0.1,
         prog_rate=0,
-        eps_decay=1.0,
         eps_min=0.01,
         deterministic=False,
     ):
         if deterministic:
             with torch.no_grad():
+                if state.device != self.device:
+                    state = state.to(self.device)
                 return torch.argmax(self.q_network(state)).view(1, 1)
         else:
-            if random.random() > max(eps * eps_decay * (1 - prog_rate), eps_min):
+            if random.random() > max(eps * (1 - prog_rate), eps_min):
                 with torch.no_grad():
+                    if state.device != self.device:
+                        state = state.to(self.device)
                     return torch.argmax(self.q_network(state)).view(1, 1)
             else:
                 return torch.tensor(
