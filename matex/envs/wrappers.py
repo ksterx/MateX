@@ -1,7 +1,6 @@
-from typing import List, Union
+import os
 
 import gymnasium as gym
-import numpy as np
 import ray
 import torch
 
@@ -11,7 +10,7 @@ from matplotlib import animation, pyplot
 
 @ray.remote
 class RayEnv(gym.Wrapper):
-    def __init__(self, env, device, record=False, **kwargs):
+    def __init__(self, env: gym.Env, device: torch.device, record: bool = False, **kwargs):
         super().__init__(env, **kwargs)
         self.device = device
         self.record = record
@@ -42,7 +41,7 @@ class RayEnv(gym.Wrapper):
             patch.set_data(self.frames[i])
 
         anim = animation.FuncAnimation(pyplot.gcf(), animate, frames=len(self.frames), interval=50)
-        anim.save(f"{dir_path}/{filename}", writer="imagemagick", fps=60)
+        anim.save(os.path.join(dir_path, filename), writer="pillow", fps=60)
 
 
 # class VecMatexEnv(VectorEnvWrapper):

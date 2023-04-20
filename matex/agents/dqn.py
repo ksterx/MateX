@@ -15,15 +15,15 @@ from .base import Agent
 class DQN(Agent):
     def __init__(
         self,
-        lr,
-        gamma,
-        memory_size,
-        batch_size,
-        state_size,
-        action_size,
-        hidden_size,
-        device,
-        is_ddqn=True,
+        lr: float,
+        gamma: float,
+        memory_size: int,
+        batch_size: int,
+        state_size: int,
+        action_size: int,
+        hidden_size: int,
+        device: torch.device,
+        is_ddqn: bool = True,
         id: int = 0,
     ):
         self.lr = lr

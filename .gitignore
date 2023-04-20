@@ -286,3 +286,4 @@ results/
 mlruns/
 .trash/
 .vscode/
+/test.gif

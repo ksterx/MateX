@@ -139,37 +139,36 @@ class Trainer:
     def test(self, num_episodes: int = 3):
         GIF_NAME = "test.gif"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Load best checkpoint
-            try:
-                self.load(
-                    Path().cwd()
-                    / Path("experiments/results")
-                    / self.logger.experiment_id
-                    / self.logger.run_id
-                    / Path("artifacts/best.ckpt")
-                )
-            except FileNotFoundError as e:
-                notice.error("Could not find best.ckpt file in artifacts directory")
-                raise e
+        # Load best checkpoint
+        try:
+            self.load(
+                Path().cwd()
+                / Path("experiments/results")
+                / self.logger.experiment_id
+                / self.logger.run_id
+                / Path("artifacts/best.ckpt")
+            )
+        except FileNotFoundError as e:
+            notice.error("Could not find best.ckpt file in artifacts directory")
+            raise e
 
-            # Prepare environment
-            env = gym.make(self.env_name, render_mode="rgb_array")
-            env = RayEnv.options(num_cpus=1).remote(env, self.device, record=True)
-            state, _ = ray.get(env.reset.remote())
-            terminated, truncated = False, False
+        # Prepare environment
+        env = gym.make(self.env_name, render_mode="rgb_array")
+        env = RayEnv.options(num_cpus=1).remote(env, self.device, record=True)
+        state, _ = ray.get(env.reset.remote())
+        terminated, truncated = False, False
 
-            # Play episodes
-            with trange(num_episodes) as pbar:
-                for ep in pbar:
-                    pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
-                    while not (terminated or truncated):
-                        action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
-                        state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
+        # Play episodes
+        with trange(num_episodes) as pbar:
+            for ep in pbar:
+                pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
+                while not (terminated or truncated):
+                    action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
+                    state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
 
-            # Save gif
-            env.save_gif.remote(temp_dir, GIF_NAME)
-            self.logger.log_artifact(os.path.join(temp_dir, GIF_NAME))
+        # Save gif (DO NOT USE Tempfile)
+        env.save_gif.remote(os.getcwd(), GIF_NAME)
+        self.logger.log_artifact(GIF_NAME)
 
     def play(self, num_episodes: int = 3):
         # Prepare environment
