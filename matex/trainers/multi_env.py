@@ -3,6 +3,7 @@ from typing import Union
 
 import gymnasium as gym
 import ray
+import torch
 from tqdm import tqdm
 
 from matex import Experience
@@ -16,7 +17,7 @@ class MultiEnvTrainer(Trainer):
     def __init__(self, cfg, callbacks=None, logger=None):
         super().__init__(cfg, callbacks, logger)
 
-    def train(self):
+    def run(self):
         self._set_logger()
 
         num_episodes = self.cfg.num_episodes if not self.cfg.debug else 10
@@ -33,36 +34,61 @@ class MultiEnvTrainer(Trainer):
                 pbar.set_description(f"[TRAIN] Episode: {ep+1:>5}")
                 best_metric_step = -float("inf")
 
-                state, info = self.env.reset()
+                state, info = zip(*ray.get([e.reset.remote() for e in self.env_ref]))
+                state_dict = {i["id"]: s for s, i in zip(state, info)}
 
                 for step in range(self.cfg.max_steps):
-                    action = [
-                        agent.act.remote(
-                            state[i],
-                            eps=self.cfg.eps_max,
-                            prog_rate=ep / self.cfg.num_episodes,
-                            eps_decay=self.cfg.eps_decay,
-                            eps_min=self.cfg.eps_min,
-                        )
-                        for i, agent in enumerate(self.agents)
-                    ]  # TODO: Check order of state
 
-                    action = ray.get(action)
-                    next_state, reward, terminated, truncated, info = self.env.step(action)
-                    reward = [
-                        get_reward_func[self.cfg.exp_name].remote(
-                            r,
-                            t,
-                            step,
-                            self.cfg.max_steps,
-                            self.device,
+                    action, id = zip(
+                        *ray.get(
+                            [
+                                agent.act.remote(
+                                    state_dict[ray.get(agent.id.remote())],
+                                    eps=self.cfg.eps_max,
+                                    prog_rate=ep / self.cfg.num_episodes,
+                                    eps_min=self.cfg.eps_min,
+                                )
+                                for agent in self.agents
+                            ]
                         )
-                        for r, t in zip(reward, terminated)
-                    ]
-                    metrics, metric_name = get_metrics_dict[self.cfg.exp_name].remote(
-                        state=state,
-                        reward=reward,
-                        step=step,
+                    )
+                    action_dict = {i: a.cpu() for a, i in zip(action, id)}
+
+                    next_state, reward, terminated, truncated, info = zip(
+                        *ray.get(
+                            [
+                                e.step.remote(action_dict[ray.get(e.id.remote())])
+                                for e in self.env_ref
+                            ]
+                        )
+                    )
+                    print(f"next_state: {next_state}")
+                    print(f"reward: {reward}")
+                    print(f"terminated: {terminated}")
+                    print(f"truncated: {truncated}")
+                    print(f"info: {info}")
+
+                    reward = ray.get(
+                        [
+                            get_reward_func[self.cfg.exp_name].remote(
+                                r,
+                                t,
+                                step,
+                                self.cfg.max_steps,
+                                self.device,
+                            )
+                            for r, t in zip(reward, terminated)
+                        ]
+                    )
+                    print(reward)
+                    metrics, metric_name = zip(
+                        ray.get(
+                            get_metrics_dict[self.cfg.exp_name].remote(
+                                state=state,
+                                reward=reward,
+                                step=step,
+                            )
+                        )
                     )
                     if metrics[metric_name] > best_metric_step:
                         best_metric_step = metrics[metric_name]
@@ -85,7 +111,10 @@ class MultiEnvTrainer(Trainer):
 
                     if terminated or truncated:
                         self.logger.log_metric(
-                            key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
+                            key=metric_name,
+                            value=best_metric_step,
+                            step=ep,
+                            prefix="episode_",
                         )
                         self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
                         if best_metric_step >= best_metric_ep:
@@ -108,7 +137,10 @@ class MultiEnvTrainer(Trainer):
     ) -> Union[gym.Env, gym.vector.VectorEnv]:
         # Prepare environment for training
         env = gym.make(self.env_name, render_mode=render_mode)
-        env_obj = [RayEnv.remote(env, self.device) for _ in range(num_envs)]
+        env_obj = [
+            RayEnv.options(num_cpus=1).remote(env, torch.device("cpu"), id=i)
+            for i in range(num_envs)
+        ]
         return env, env_obj
 
     def _set_agent(self):
@@ -119,7 +151,7 @@ class MultiEnvTrainer(Trainer):
                 memory_size=self.acfg.memory_size,
                 batch_size=self.acfg.batch_size,
                 state_size=self.env.observation_space.shape[0],
-                action_size=self.env.action_space.nvec[0],  # TODO: only works for Discrete
+                action_size=self.env.action_space.n,  # TODO: only works for Discrete
                 hidden_size=self.acfg.hidden_size,
                 device=self.device,
                 is_ddqn=self.acfg.is_ddqn,
@@ -127,3 +159,32 @@ class MultiEnvTrainer(Trainer):
             )
             for i in range(self.cfg.num_envs)
         ]
+
+    def _get_memory_server(self):
+        pass
+
+    def run_(self):
+        self._set_logger()
+
+        self.memory = Memory(self.acfg.memory_size)
+
+        done = False
+        while not done:
+
+            self.
+
+            # send to memory server
+            exps = self.memory.sample(self.batch_size)
+            # train asynchronously
+
+
+    @ray.remote
+    def _rollout(self):
+        return Experience
+
+    @ray.remote
+    def _train(self, exp):
+        self.agent.learn.remote(exp)
+
+    def _format_batch(self, batch):
+        return Experience(*zip(*batch))

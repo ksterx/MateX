@@ -26,7 +26,7 @@ def main(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"Invalid number of environments: {cfg.num_envs}")
 
-    trainer.train()
+    trainer.run()
     trainer.test()
     trainer.play()
     notice.info("Completed!")

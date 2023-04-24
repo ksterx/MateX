@@ -23,6 +23,7 @@ class DQN(Agent):
         action_size: int,
         hidden_size: int,
         device: torch.device,
+        has_memory: bool = False,
         is_ddqn: bool = True,
         id: int = 0,
     ):
@@ -32,8 +33,10 @@ class DQN(Agent):
         self.batch_size = batch_size
         self.device = device
         self.action_size = action_size
+        self.has_memory = has_memory
         self.is_ddqn = is_ddqn
-        self.id = id
+        self.__id = id
+
 
         self.q_network = QNet(
             state_size,
@@ -64,17 +67,17 @@ class DQN(Agent):
             with torch.no_grad():
                 if state.device != self.device:
                     state = state.to(self.device)
-                return torch.argmax(self.q_network(state)).view(1, 1)
+                return torch.argmax(self.q_network(state)).view(1, 1), self.__id
         else:
             if random.random() > max(eps * (1 - prog_rate), eps_min):
                 with torch.no_grad():
                     if state.device != self.device:
                         state = state.to(self.device)
-                    return torch.argmax(self.q_network(state)).view(1, 1)
+                    return torch.argmax(self.q_network(state)).view(1, 1), self.__id
             else:
                 return torch.tensor(
                     [[random.randrange(self.action_size)]], device=self.device, dtype=torch.long
-                )
+                ), self.__id
 
     def learn(self):
         if len(self.memory) < self.batch_size:
@@ -83,10 +86,11 @@ class DQN(Agent):
         exps = self.memory.sample(self.batch_size)
         batch = Experience(*zip(*exps))
 
-        states = torch.cat(batch.state)
-        actions = torch.cat(batch.action)
-        next_states = torch.cat(batch.next_state)
-        rewards = torch.cat(batch.reward)
+        # Get tensors from batch and send to device
+        states = torch.cat(batch.state).to(self.device)
+        actions = torch.cat(batch.action).to(self.device)
+        next_states = torch.cat(batch.next_state).to(self.device)
+        rewards = torch.cat(batch.reward).to(self.device)
         terminateds = torch.tensor(batch.terminated, device=self.device, dtype=torch.float).view(
             -1, 1
         )
@@ -135,3 +139,7 @@ class DQN(Agent):
 
     def on_episode_end(self):
         pass
+
+    # DO NOT ADD @property
+    def id(self):
+        return self.__id

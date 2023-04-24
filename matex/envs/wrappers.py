@@ -3,17 +3,17 @@ import os
 import gymnasium as gym
 import ray
 import torch
-
 # from gymnasium.vector import VectorEnvWrapper
 from matplotlib import animation, pyplot
 
 
 @ray.remote
 class RayEnv(gym.Wrapper):
-    def __init__(self, env: gym.Env, device: torch.device, record: bool = False, **kwargs):
+    def __init__(self, env: gym.Env, device: torch.device, record: bool = False, id: int = 0, **kwargs):
         super().__init__(env, **kwargs)
         self.device = device
         self.record = record
+        self.__id = id
         self.frames = []
 
     def step(self, action):
@@ -21,6 +21,7 @@ class RayEnv(gym.Wrapper):
         next_state, reward, terminated, truncated, info = self.env.step(action)
         next_state = torch.tensor(next_state, device=self.device, dtype=torch.float).view(1, -1)
         reward = torch.tensor(reward, device=self.device, dtype=torch.float).view(1, 1)
+        info["id"] = self.__id
         if self.record:
             self.frames.append(self.env.render())
         return next_state, reward, terminated, truncated, info
@@ -28,6 +29,8 @@ class RayEnv(gym.Wrapper):
     def reset(self):
         state, info = self.env.reset()
         state = torch.tensor(state, device=self.device, dtype=torch.float).view(1, -1)
+        info["id"] = self.__id
+
         return state, info
 
     def save_gif(self, dir_path: str, filename: str):
@@ -42,6 +45,10 @@ class RayEnv(gym.Wrapper):
 
         anim = animation.FuncAnimation(pyplot.gcf(), animate, frames=len(self.frames), interval=50)
         anim.save(os.path.join(dir_path, filename), writer="pillow", fps=60)
+
+    # DO NOT ADD @property
+    def id(self):
+        return self.__id
 
 
 # class VecMatexEnv(VectorEnvWrapper):

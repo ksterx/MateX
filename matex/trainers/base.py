@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import List, Union
 
@@ -13,11 +14,8 @@ from matex import Experience
 from matex.agents import DQN
 from matex.common import Callback, notice
 from matex.common.loggers import MLFlowLogger
-from matex.envs import RayEnv, env_name_aliases, get_metrics_dict, get_reward_func
-
-# import heartrate
-
-# heartrate.trace(browser=True)
+from matex.envs import (RayEnv, env_name_aliases, get_metrics_dict,
+                        get_reward_func)
 
 
 class Trainer:
@@ -50,12 +48,12 @@ class Trainer:
         self.render_mode = "human" if cfg.render else None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_gpus = torch.cuda.device_count()  # TODO: use cfg.num_gpus
-        self.env, self.env_ref = self._make_env(num_envs=cfg.num_envs)
+        self.env, self.env_ref = self._make_env(num_envs=cfg.num_envs, render_mode=self.render_mode)
 
         # Set agent(s)
         self._set_agent()
 
-    def train(self):
+    def run(self):
         self._set_logger()
 
         num_episodes = self.cfg.num_episodes if not self.cfg.debug else 3
@@ -69,17 +67,17 @@ class Trainer:
                     state, _ = ray.get(self.env_ref.reset.remote())
 
                     for step in range(self.cfg.max_steps):
-                        action = ray.get(
+                        action, info = ray.get(
                             self.agent.act.remote(
                                 state,
                                 eps=self.cfg.eps_max,
                                 prog_rate=ep / self.cfg.num_episodes,
                                 eps_min=self.cfg.eps_min,
                             )
-                        ).cpu()
+                        )
 
                         next_state, reward, terminated, truncated, info = ray.get(
-                            self.env_ref.step.remote(action)
+                            self.env_ref.step.remote(action.cpu())
                         )
 
                         reward = ray.get(
@@ -102,7 +100,9 @@ class Trainer:
                         if metrics[metric_name] > best_metric_step:
                             best_metric_step = metrics[metric_name]
 
-                        self.logger.log_metrics(metrics=metrics, step=step, prefix="step_")
+                        self.logger.log_metrics(
+                            metrics=metrics, step=step, prefix="step_"
+                        )
 
                         exp = Experience(
                             state=state,
@@ -120,7 +120,10 @@ class Trainer:
 
                         if terminated or truncated:
                             self.logger.log_metric(
-                                key=metric_name, value=best_metric_step, step=ep, prefix="episode_"
+                                key=metric_name,
+                                value=best_metric_step,
+                                step=ep,
+                                prefix="episode_",
                             )
                             self.agent.save.remote(f"{temp_dir}/chekpoint.ckpt")
                             if best_metric_step >= best_metric_ep:
@@ -163,11 +166,16 @@ class Trainer:
             for ep in pbar:
                 pbar.set_description(f"[TEST] Episode: {ep+1:>5}")
                 while not (terminated or truncated):
-                    action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
-                    state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
+                    action, _ = ray.get(
+                        self.agent.act.remote(state, deterministic=True)
+                    )
+                    state, _, terminated, truncated, _ = ray.get(
+                        env.step.remote(action.cpu())
+                    )
 
         # Save gif (DO NOT USE Tempfile)
         env.save_gif.remote(os.getcwd(), GIF_NAME)
+        time.sleep(1)
         self.logger.log_artifact(GIF_NAME)
 
     def play(self, num_episodes: int = 3):
@@ -182,8 +190,12 @@ class Trainer:
             for ep in pbar:
                 pbar.set_description(f"[PLAY] Episode: {ep+1:>5}")
                 while not (terminated or truncated):
-                    action = ray.get(self.agent.act.remote(state, deterministic=True)).cpu()
-                    state, _, terminated, truncated, _ = ray.get(env.step.remote(action))
+                    action, _ = ray.get(
+                        self.agent.act.remote(state, deterministic=True)
+                    )
+                    state, _, terminated, truncated, _ = ray.get(
+                        env.step.remote(action.cpu())
+                    )
 
     def load(self, ckpt_path):
         self.agent.load.remote(ckpt_path)
